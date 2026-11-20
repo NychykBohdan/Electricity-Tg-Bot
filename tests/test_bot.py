@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 from app.bot.handlers import menu, onboarding
 from app.bot.storage import SqlStorage, current_db
+from app.db.models import effective_prefs
 from app.db.repo import Database
 from app.services.poller import Poller
 from tests.test_flow import FakeNotifier, FakePrykarpattya
@@ -112,30 +113,57 @@ async def test_onboarding_by_account_and_settings(env):
     await press("m:account")
     await msg("24100994")
     assert "Твоя черга: <b>4.1</b>" in s.texts()[-1]
-    await msg("Офіс")
+    await msg("Офіс <2>")
     sub = (await db.user_subscriptions(42))[0]
-    assert sub.title == "Офіс" and sub.group == "4.1" and sub.address == "Особовий рахунок №24100994"
+    assert sub.title == "Офіс <2>" and sub.group == "4.1" and sub.address == "Особовий рахунок №24100994"
+    assert sub.overridden() == []   # нова адреса бере загальні налаштування
 
-    # налаштування: до відключення 30 → 10 хв, до появи світла вимк → 15 хв, сповіщення вимк
-    assert sub.restore_remind_minutes == 0
-    await press(f"rm:off:{sub.id}")
+    # загальні налаштування: до відключення 30 → 15 хв, період «зараз і далі»
+    await msg("⚙️ Налаштування")
+    assert "Загальні налаштування" in s.texts()[-1]
+    await press("st:u:off")
     assert "вимкнеться" in s.texts()[-1]
-    await press(f"rs:off:{sub.id}:10")
-    await press(f"rm:on:{sub.id}")
-    assert "з'явиться" in s.texts()[-1]
-    await press(f"rs:on:{sub.id}:15")
-    await press(f"rs:on:{sub.id}:45")   # не з переліку — ігнорується
-    await press(f"nc:{sub.id}")
-    sub = await db.get_subscription(sub.id, 42)
-    assert sub.remind_minutes == 10 and sub.restore_remind_minutes == 15 and sub.notify_changes is False
+    await press("ss:u:off:2")       # 15 хв
+    await press("ss:u:pd:1")        # поточний і наступний період
+    await press("ss:u:off:-")       # «як у загальних» для самих загальних не буває — ігнорується
+    await press("ss:u:off:99")      # не з переліку — ігнорується
+    user = (await db.users_by_ids({42}))[42]
+    assert user.remind_minutes == 15 and user.schedule_period == "now"
 
-    # вигляд графіка: усі години → лише без світла
-    assert sub.schedule_view == "all"
-    await press(f"vw:{sub.id}")
-    assert "Які години показувати" in s.texts()[-1]
-    await press(f"vs:{sub.id}:off")
-    await press(f"vs:{sub.id}:bogus")   # невідомий режим — ігнорується
-    assert (await db.get_subscription(sub.id, 42)).schedule_view == "off"
+    # своє для адреси: до появи світла 10 хв, без сповіщень про зміни; решта — із загальних
+    await press(f"sub:{sub.id}")
+    assert "Офіс &lt;2&gt;" in s.texts()[-1]          # назва екранована в HTML
+    await press(f"st:{sub.id}:on")
+    assert "з'явиться" in s.texts()[-1] and "Як у загальних (вимк)" in str(s.calls[-1].reply_markup)
+    await press(f"ss:{sub.id}:on:1")   # 10 хв
+    await press(f"ss:{sub.id}:nc:1")   # вимк
+    sub = await db.get_subscription(sub.id, 42)
+    prefs = effective_prefs(user, sub)
+    assert (prefs.remind_minutes, prefs.restore_remind_minutes, prefs.notify_changes) == (15, 10, False)
+    assert prefs.schedule_period == "now" and sub.overridden() == ["restore_remind_minutes", "notify_changes"]
+    # знову «як у загальних» для одного налаштування
+    await press(f"ss:{sub.id}:nc:-")
+    assert (await db.get_subscription(sub.id, 42)).notify_changes is None
+
+    # чужу адресу змінити не можна
+    await db.ensure_user(7)
+    other = await db.add_subscription(user_id=7, title="Чужа", city_key=sub.city_key, provider_id=1,
+                                      source_key=sub.source_key, group="1.1")
+    await press(f"ss:{other.id}:on:0")
+    await press(f"st:{other.id}:on")
+    assert (await db.get_subscription(other.id, 7)).restore_remind_minutes is None
+    assert "Чужа" not in s.texts()[-1]
+
+    # скинути власні налаштування всіх адрес
+    await msg("⚙️ Налаштування")
+    assert "Свої налаштування мають: Офіс &lt;2&gt;" in s.texts()[-1]
+    await press("rst")
+    await press("rstok")
+    assert (await db.get_subscription(sub.id, 42)).overridden() == []
+
+    # кнопка зі старого повідомлення (до цієї версії) — відповідаємо, а не мовчимо
+    await press(f"rm:off:{sub.id}")
+    assert "не діє" in s.calls[-1].text
 
     # кнопка меню посеред додавання адреси скидає діалог
     await msg("➕ Додати адресу")

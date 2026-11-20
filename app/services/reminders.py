@@ -8,6 +8,7 @@ from datetime import date, datetime, time, timedelta
 from app.config import TZ
 from app.core.formatter import format_reminder, format_restore_reminder
 from app.core.models import DayStatus, Event, to_events
+from app.db.models import effective_prefs
 from app.db.repo import Database, snapshot_to_day
 from app.services.notifier import Notifier
 
@@ -32,8 +33,11 @@ async def check_reminders(db: Database, notifier: Notifier, now: datetime | None
     now = now or datetime.now(TZ)
     sent = 0
     cache: dict[tuple[str, str], tuple[list[Event], set[date]]] = {}
-    for sub in await db.all_subscriptions():
-        before_off, before_on = sub.remind_minutes, sub.restore_remind_minutes
+    subs = await db.all_subscriptions()
+    users = await db.users_by_ids({s.user_id for s in subs})
+    for sub in subs:
+        prefs = effective_prefs(users.get(sub.user_id), sub)
+        before_off, before_on = prefs.remind_minutes, prefs.restore_remind_minutes
         if before_off <= 0 and before_on <= 0:
             continue
         k = (sub.source_key, sub.group)

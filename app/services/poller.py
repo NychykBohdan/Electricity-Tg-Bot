@@ -10,6 +10,7 @@ from app.collectors.prykarpattya import PrykarpattyaClient
 from app.config import TZ
 from app.core.diff import ChangeKind, DayChange, compare
 from app.core.formatter import format_change
+from app.db.models import effective_prefs
 from app.db.repo import Database, snapshot_to_day
 from app.regions import City, all_sources, get_city
 from app.services.notifier import Notifier
@@ -60,10 +61,15 @@ class Poller:
         from app.bot.keyboards import schedule_kb  # уникаємо циклічного імпорту
 
         now = datetime.now(TZ)
-        for sub in await self.db.subscriptions_for(key, group):
-            if not sub.notify_changes:
+        subs = await self.db.subscriptions_for(key, group)
+        users = await self.db.users_by_ids({s.user_id for s in subs})
+        for sub in subs:
+            prefs = effective_prefs(users.get(sub.user_id), sub)
+            if not prefs.notify_changes:
                 continue
-            text = format_change(sub.title, sub_subtitle(sub.city_key, sub.group), ch, now, sub.schedule_view)
+            text = format_change(
+                sub.title, sub_subtitle(sub.city_key, sub.group), ch, now, prefs.schedule_view, prefs.schedule_period
+            )
             day_idx = (ch.new.day - now.date()).days
             await self.notifier.send(sub.user_id, text, schedule_kb(sub.id, day_idx))
 

@@ -87,8 +87,10 @@ def format_schedule(
     updated_at: datetime | None = None,
     target: date | None = None,
     view: str = "all",
+    period: str = "day",
 ) -> str:
-    """view: "all" — години зі світлом і без, "on" — лише зі світлом, "off" — лише без світла."""
+    """view: "all" — години зі світлом і без, "on" — лише зі світлом, "off" — лише без світла.
+    period: "day" — уся доба, "now" — лише поточний і наступний період (для сьогодні)."""
     lines = [f"📍 <b>{escape(title)}</b>", f"<i>{escape(subtitle)}</i>", ""]
     if day is None:
         if target:
@@ -112,19 +114,27 @@ def format_schedule(
             on_minutes = 1440 - day.total_off_minutes
             # хвилина доби «зараз» — лише для сьогодні; для завтра нічого не закреслюємо
             now_min = now.hour * 60 + now.minute if day.day == now.date() else -1
-            rows: list[str] = []
+            rows: list[tuple[bool, str]] = []  # (уже минуло, рядок)
             for is_off, it in segments(day):
                 if (view == "on" and is_off) or (view == "off" and not is_off):
                     continue
                 icon = "🔴" if is_off else "🟢"
                 note = "  без світла" if is_off else ("  зі світлом" if view == "on" else "")
-                if it.end <= now_min:  # уже минуло — закреслюємо
-                    rows.append(f"{icon} <s>{interval_str(it)}{note}</s>")
+                passed = it.end <= now_min
+                if passed:  # уже минуло — закреслюємо
+                    rows.append((True, f"{icon} <s>{interval_str(it)}{note}</s>"))
                 elif is_off or view == "on":
-                    rows.append(f"{icon} <b>{interval_str(it)}</b>{note}")
+                    rows.append((False, f"{icon} <b>{interval_str(it)}</b>{note}"))
                 else:
-                    rows.append(f"{icon} {interval_str(it)}")
-            for i, row in enumerate(rows):
+                    rows.append((False, f"{icon} {interval_str(it)}"))
+            if period == "now" and now_min >= 0:
+                # лише поточний і наступний період; на завтра графік завжди повний
+                rows = [r for r in rows if not r[0]][:2]
+                if not rows and on_minutes:
+                    lines.append(
+                        "🔴 Сьогодні світла вже не буде" if view == "on" else "✅ Сьогодні відключень більше немає"
+                    )
+            for i, (_, row) in enumerate(rows):
                 if i:
                     lines.append("")  # порожній рядок між періодами — щоб легше читалось
                 lines.append(row)
@@ -144,7 +154,9 @@ def format_schedule(
     return "\n".join(lines)
 
 
-def format_change(title: str, subtitle: str, ch: DayChange, now: datetime, view: str = "all") -> str:
+def format_change(
+    title: str, subtitle: str, ch: DayChange, now: datetime, view: str = "all", period: str = "day"
+) -> str:
     label = day_label(ch.new.day, now.date())
     head = f"📍 <b>{escape(title)}</b> · <i>{escape(subtitle)}</i>\n"
 
@@ -161,7 +173,7 @@ def format_change(title: str, subtitle: str, ch: DayChange, now: datetime, view:
         if ch.became_on:
             head += "➖ Скасовано: " + ", ".join(interval_str(i) for i in ch.became_on) + "\n"
 
-    body = format_schedule(title=title, subtitle=subtitle, day=ch.new, now=now, view=view)
+    body = format_schedule(title=title, subtitle=subtitle, day=ch.new, now=now, view=view, period=period)
     # прибираємо з body дубль заголовка і дати
     body = "\n".join(body.split("\n")[5:])
     return head + "\n" + body

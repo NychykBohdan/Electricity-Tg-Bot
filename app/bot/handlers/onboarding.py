@@ -13,7 +13,6 @@ from app.bot import keyboards as kb
 from app.bot.views import render_schedule
 from app.collectors.base import CollectorError
 from app.collectors.prykarpattya import PrykarpattyaClient
-from app.config import settings
 from app.db.repo import Database
 from app.regions import cities_in, get_city, get_provider, oblasts, source_key
 from app.services.poller import Poller
@@ -197,8 +196,7 @@ async def finish(message: Message, user_id: int, title: str, state: FSMContext, 
         source_key=key,
         group=data["group"],
         address=data.get("address"),
-        remind_minutes=settings.default_remind_minutes,
-        notify_changes=True,
+        # налаштування не задаємо — для нової адреси діють загальні налаштування користувача
     )
     if not await db.has_source(key):  # даних ще немає — тягнемо одразу
         try:
@@ -206,10 +204,9 @@ async def finish(message: Message, user_id: int, title: str, state: FSMContext, 
         except CollectorError:
             log.exception("initial fetch failed")
     await message.answer(
-        f"✅ Збережено! Я напишу, якщо графік зміниться, і нагадаю за "
-        f"{settings.default_remind_minutes} хв до відключення.\n"
-        "У «📍 Мої адреси» можна змінити час нагадування і ввімкнути попередження "
-        "про появу світла.",
+        "✅ Збережено! Для цієї адреси діють твої загальні налаштування — нагадування, "
+        f"сповіщення і вигляд графіка змінюються в «{kb.BTN_SETTINGS}».\n"
+        "Своє налаштування для окремої адреси можна задати в «📍 Мої адреси».",
         reply_markup=kb.main_menu(),
     )
     await message.answer(await render_schedule(db, sub, 0), reply_markup=kb.schedule_kb(sub.id, 0))
@@ -218,3 +215,9 @@ async def finish(message: Message, user_id: int, title: str, state: FSMContext, 
 @router.message(StateFilter(AddSub), ~F.text)
 async def non_text(message: Message) -> None:
     await message.answer("Скористайся кнопками вище або напиши текстом 🙂")
+
+
+@router.callback_query()
+async def stale_button(cb: CallbackQuery) -> None:
+    """Останній у ланцюжку: кнопка зі старого повідомлення, яку вже ніхто не обробляє."""
+    await cb.answer("Ця кнопка вже не діє — відкрий меню ще раз", show_alert=True)

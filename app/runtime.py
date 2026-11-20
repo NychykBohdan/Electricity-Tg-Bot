@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 COMMANDS = [
     BotCommand(command="schedule", description="Графік відключень"),
     BotCommand(command="addresses", description="Мої адреси"),
+    BotCommand(command="settings", description="Налаштування"),
     BotCommand(command="start", description="Почати / додати адресу"),
     BotCommand(command="help", description="Допомога"),
 ]

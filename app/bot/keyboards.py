@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from aiogram.types import InlineKeyboardButton as B
 from aiogram.types import InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
@@ -6,22 +8,19 @@ from app.regions import GROUPS, City
 BTN_SCHEDULE = "📅 Графік"
 BTN_SUBS = "📍 Мої адреси"
 BTN_ADD = "➕ Додати адресу"
+BTN_SETTINGS = "⚙️ Налаштування"
 BTN_HELP = "ℹ️ Допомога"
 
-REMIND_STEPS = [5, 10, 15, 30]  # хвилини; 0 = вимкнено
-# вид нагадування → (поле Subscription, заголовок кнопки, питання у виборі)
-REMIND_KINDS = {
-    "off": ("remind_minutes", "⏰ До відключення", "За скільки попередити, що світло <b>вимкнеться</b>?"),
-    "on": ("restore_remind_minutes", "💡 До появи світла", "За скільки попередити, що світло <b>з'явиться</b>?"),
-}
 TITLE_PRESETS = ["🏠 Дім", "💼 Робота"]
+OVERRIDE_MARK = "✏️"   # позначка «своє налаштування для цієї адреси»
 
 
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_SCHEDULE), KeyboardButton(text=BTN_SUBS)],
-            [KeyboardButton(text=BTN_ADD), KeyboardButton(text=BTN_HELP)],
+            [KeyboardButton(text=BTN_ADD), KeyboardButton(text=BTN_SETTINGS)],
+            [KeyboardButton(text=BTN_HELP)],
         ],
         resize_keyboard=True,
     )
@@ -88,59 +87,115 @@ def subs_list_kb(subs, prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=btns)
 
 
-# режим показу графіка → (кнопка вибору, коротко для картки адреси)
-SCHEDULE_VIEWS = {
-    "all": ("🟢🔴 Години зі світлом і без", "усі години"),
-    "on": ("🟢 Лише години зі світлом", "лише зі світлом"),
-    "off": ("🔴 Лише години без світла", "лише без світла"),
+# ---------- налаштування (загальні й для окремої адреси) ----------
+@dataclass(frozen=True)
+class Option:
+    value: object
+    short: str   # на кнопці налаштування: «⏰ До відключення: 30 хв»
+    long: str    # у виборі значення
+
+
+@dataclass(frozen=True)
+class SettingDef:
+    field: str       # поле в User (загальне) і Subscription (перевизначення)
+    label: str
+    question: str
+    options: tuple[Option, ...]
+    per_row: int = 1
+
+
+_MINUTES = tuple(Option(m, f"{m} хв", f"{m} хв") for m in (5, 10, 15, 30)) + (Option(0, "вимк", "🔕 Вимкнено"),)
+
+# ключ (у callback_data) → опис. Порядок = порядок кнопок.
+SETTINGS: dict[str, SettingDef] = {
+    "vw": SettingDef("schedule_view", "🗓 Показ графіка", "Які години показувати в графіку?", (
+        Option("all", "усі години", "🟢🔴 Години зі світлом і без"),
+        Option("on", "лише зі світлом", "🟢 Лише години зі світлом"),
+        Option("off", "лише без світла", "🔴 Лише години без світла"),
+    )),
+    "pd": SettingDef("schedule_period", "🕐 Період", "Що показувати в графіку на сьогодні?", (
+        Option("day", "уся доба", "🕛 Усі години доби"),
+        Option("now", "зараз і далі", "⏭ Поточний і наступний період"),
+    )),
+    "off": SettingDef("remind_minutes", "⏰ До відключення",
+                      "За скільки попередити, що світло <b>вимкнеться</b>?", _MINUTES, per_row=4),
+    "on": SettingDef("restore_remind_minutes", "💡 До появи світла",
+                     "За скільки попередити, що світло <b>з'явиться</b>?", _MINUTES, per_row=4),
+    "nc": SettingDef("notify_changes", "🔔 Зміни графіка",
+                     "Повідомляти, коли графік змінюється або публікують графік на завтра?", (
+                         Option(True, "увімк", "🔔 Повідомляти"),
+                         Option(False, "вимк", "🔕 Не повідомляти"),
+                     )),
 }
 
 
-def minutes_label(m: int) -> str:
-    return f"{m} хв" if m else "вимк"
+def option_label(sdef: SettingDef, value: object) -> str:
+    for o in sdef.options:
+        if o.value == value and type(o.value) is type(value):
+            return o.short
+    return f"{value} хв" if isinstance(value, int) and not isinstance(value, bool) else str(value)
 
 
-def sub_settings_kb(sub) -> InlineKeyboardMarkup:
-    changes = "увімк" if sub.notify_changes else "вимк"
-    remind_rows = [
-        [B(text=f"{label}: {minutes_label(getattr(sub, field))}", callback_data=f"rm:{kind}:{sub.id}")]
-        for kind, (field, label, _) in REMIND_KINDS.items()
+def _setting_button(scope: str, key: str, value: object, overridden: bool = False) -> list[B]:
+    sdef = SETTINGS[key]
+    mark = f" {OVERRIDE_MARK}" if overridden else ""
+    return [B(text=f"{sdef.label}: {option_label(sdef, value)}{mark}", callback_data=f"st:{scope}:{key}")]
+
+
+def global_settings_kb(user, has_overrides: bool) -> InlineKeyboardMarkup:
+    rows = [_setting_button("u", key, getattr(user, sdef.field)) for key, sdef in SETTINGS.items()]
+    if has_overrides:
+        rows.append([B(text="♻️ Скинути власні налаштування адрес", callback_data="rst")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def confirm_reset_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[B(text="Так, скинути", callback_data="rstok"), B(text="Ні", callback_data="settings")]]
+    )
+
+
+def sub_settings_kb(sub, prefs) -> InlineKeyboardMarkup:
+    """prefs — налаштування, що фактично діють для адреси (models.effective_prefs)."""
+    rows = [
+        _setting_button(str(sub.id), key, getattr(prefs, sdef.field), getattr(sub, sdef.field) is not None)
+        for key, sdef in SETTINGS.items()
     ]
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [B(text="📅 Показати графік", callback_data=f"sv:{sub.id}:0")],
-            [B(text=f"🗓 Показ графіка: {view_label(sub.schedule_view)}", callback_data=f"vw:{sub.id}")],
-            *remind_rows,
-            [B(text=f"🔔 Сповіщення про зміни: {changes}", callback_data=f"nc:{sub.id}")],
+            *rows,
             [B(text="🗑 Видалити", callback_data=f"del:{sub.id}")],
             [B(text="« До списку", callback_data="subs")],
         ]
     )
 
 
-def view_label(view: str) -> str:
-    return SCHEDULE_VIEWS.get(view, SCHEDULE_VIEWS["all"])[1]
+def setting_picker_kb(scope: str, key: str, current: object, inherited: object = None) -> InlineKeyboardMarkup:
+    """Вибір значення. scope: "u" — загальні, інакше id адреси.
+    Для адреси current=None означає «як у загальних», inherited — яке це значення."""
+    sdef = SETTINGS[key]
 
+    def mark(chosen: bool, text: str) -> str:
+        return f"✅ {text}" if chosen else text
 
-def view_picker_kb(sub) -> InlineKeyboardMarkup:
-    rows = [
-        [B(text=f"✅ {text}" if view == sub.schedule_view else text, callback_data=f"vs:{sub.id}:{view}")]
-        for view, (text, _) in SCHEDULE_VIEWS.items()
+    btns = [
+        B(text=mark(current is not None and o.value == current, o.long), callback_data=f"ss:{scope}:{key}:{i}")
+        for i, o in enumerate(sdef.options)
     ]
-    return InlineKeyboardMarkup(inline_keyboard=rows + [[B(text="« Назад", callback_data=f"sub:{sub.id}")]])
-
-
-def remind_picker_kb(sub, kind: str) -> InlineKeyboardMarkup:
-    current = getattr(sub, REMIND_KINDS[kind][0])
-    mark = lambda m, t: f"✅ {t}" if m == current else t  # noqa: E731
-    steps = [B(text=mark(m, f"{m} хв"), callback_data=f"rs:{kind}:{sub.id}:{m}") for m in REMIND_STEPS]
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            steps,
-            [B(text=mark(0, "🔕 Вимкнено"), callback_data=f"rs:{kind}:{sub.id}:0")],
-            [B(text="« Назад", callback_data=f"sub:{sub.id}")],
-        ]
-    )
+    # кнопки з однаковою шириною в ряд, «🔕 Вимкнено» — окремим рядком
+    narrow = [b for b, o in zip(btns, sdef.options) if o.long == o.short]
+    wide = [b for b, o in zip(btns, sdef.options) if o.long != o.short]
+    rows = _rows(narrow, sdef.per_row) + [[b] for b in wide]
+    if scope == "u":
+        back = "settings"
+    else:
+        rows.append([B(
+            text=mark(current is None, f"↩️ Як у загальних ({option_label(sdef, inherited)})"),
+            callback_data=f"ss:{scope}:{key}:-",
+        )])
+        back = f"sub:{scope}"
+    return InlineKeyboardMarkup(inline_keyboard=rows + [[B(text="« Назад", callback_data=back)]])
 
 
 def confirm_delete_kb(sub_id: int) -> InlineKeyboardMarkup:

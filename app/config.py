@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///data/bot.db"
     poll_interval_sec: int = 300        # як часто опитувати джерела
     reminder_check_sec: int = 60        # як часто перевіряти нагадування
-    default_remind_minutes: int = 30
     admin_id: int | None = None         # кому слати алерти, якщо джерело "мовчить"
     log_level: str = "INFO"
 

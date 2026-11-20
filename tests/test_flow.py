@@ -82,7 +82,7 @@ async def test_full_cycle(tmp_path):
     assert await check_reminders(db, notifier, t + timedelta(minutes=1)) == 0
 
     # 5б) поява світла: відключення 16:00–19:00, попередження за 15 хв
-    await db.update_subscription(sub.id, restore_remind_minutes=15)
+    await db.update_user(42, restore_remind_minutes=15)   # загальне налаштування діє на адресу
     notifier.sent.clear()
     assert await check_reminders(db, notifier, t) == 0          # світло ще є — рано
     t_on = datetime(today.year, today.month, today.day, 18, 50, tzinfo=TZ)

@@ -129,3 +129,27 @@ def test_format_outputs():
     msg = format_change("Дім", subtitle, compare(old, day), now)
     print("\n" + msg)
     assert "Графік змінився" in msg and "➕ Додано відключення: 16:00–19:00" in msg
+
+
+def test_period_now():
+    """Режим «поточний і наступний період»: лише два рядки, минулі приховано."""
+    day = DaySchedule(D, DayStatus.SCHEDULE, (Interval(360, 570), Interval(960, 1140)))
+    at = lambda h, m=0: datetime(2026, 11, 9, h, m, tzinfo=TZ)  # noqa: E731
+
+    def periods(text: str) -> list[str]:
+        return [ln for ln in text.split("\n") if ln.startswith(("🟢 ", "🔴 ", "✅ ")) and "Зараз" not in ln]
+
+    fmt = lambda now, **kw: format_schedule(title="Дім", subtitle="s", day=day, now=now, period="now", **kw)  # noqa: E731
+    assert periods(fmt(at(14, 30))) == ["🟢 09:30–16:00", "🔴 <b>16:00–19:00</b>  без світла"]
+    assert periods(fmt(at(20))) == ["🟢 19:00–24:00"]               # останній період доби
+    assert periods(fmt(at(7), view="off")) == [
+        "🔴 <b>06:00–09:30</b>  без світла", "🔴 <b>16:00–19:00</b>  без світла",
+    ]
+    assert periods(fmt(at(20), view="off")) == ["✅ Сьогодні відключень більше немає"]
+    assert "Без світла: <b>6 год 30 хв</b>" in fmt(at(20))           # підсумок за добу лишається
+    # графік на завтра — завжди повний
+    assert len(periods(fmt(at(14) - timedelta(days=1)))) == 5
+    # у повідомленні про зміну — так само
+    old = DaySchedule(D, DayStatus.SCHEDULE, (Interval(360, 570),))
+    msg = format_change("Дім", "s", compare(old, day), at(14, 30), period="now")
+    assert periods(msg) == ["🟢 09:30–16:00", "🔴 <b>16:00–19:00</b>  без світла"]

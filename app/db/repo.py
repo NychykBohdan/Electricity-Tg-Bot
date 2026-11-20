@@ -6,12 +6,14 @@ from datetime import UTC, date, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Connection, delete, inspect, select, text
+from sqlalchemy import Connection, delete, inspect, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.models import DaySchedule
-from app.db.models import Base, FsmRecord, KeyValue, ScheduleSnapshot, SentReminder, Subscription, User
+from app.db.models import (
+    DEFAULT_PREFS, PREF_FIELDS, Base, FsmRecord, KeyValue, ScheduleSnapshot, SentReminder, Subscription, User,
+)
 
 
 def to_db(dt: datetime) -> datetime:
@@ -45,21 +47,75 @@ def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(u)
 
 
-_NEW_SUBSCRIPTION_COLUMNS = {
-    "restore_remind_minutes": "INTEGER NOT NULL DEFAULT 0",
-    "schedule_view": "VARCHAR(8) NOT NULL DEFAULT 'all'",
+# Колонки, яких могло не бути в старих базах. Лише константи — жодних даних від користувача.
+_NEW_COLUMNS = {
+    "users": {
+        "schedule_view": "VARCHAR(8) NOT NULL DEFAULT 'all'",
+        "schedule_period": "VARCHAR(8) NOT NULL DEFAULT 'day'",
+        "remind_minutes": "INTEGER NOT NULL DEFAULT 30",
+        "restore_remind_minutes": "INTEGER NOT NULL DEFAULT 0",
+        "notify_changes": "BOOLEAN NOT NULL DEFAULT TRUE",
+    },
+    # у адресах це перевизначення: NULL = як у загальних налаштуваннях
+    "subscriptions": {
+        "restore_remind_minutes": "INTEGER",
+        "schedule_view": "VARCHAR(8)",
+        "schedule_period": "VARCHAR(8)",
+    },
 }
+
+
+def _add_missing_columns(conn: Connection, table: str) -> None:
+    cols = {c["name"] for c in inspect(conn).get_columns(table)}
+    if_not_exists = "IF NOT EXISTS " if conn.dialect.name == "postgresql" else ""
+    for name, ddl in _NEW_COLUMNS[table].items():
+        if name not in cols:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {if_not_exists}{name} {ddl}"))
+
+
+def _rebuild_sqlite_subscriptions(conn: Connection) -> None:
+    """SQLite не вміє ALTER COLUMN: створюємо таблицю за поточною моделлю і переносимо рядки."""
+    insp = inspect(conn)
+    old_cols = {c["name"] for c in insp.get_columns("subscriptions")}
+    old_indexes = [i["name"] for i in insp.get_indexes("subscriptions")]
+    # legacy_alter_table: щоб зовнішній ключ sent_reminders і далі вказував на "subscriptions"
+    conn.exec_driver_sql("PRAGMA legacy_alter_table=ON")
+    conn.exec_driver_sql("ALTER TABLE subscriptions RENAME TO _subscriptions_old")
+    for name in old_indexes:  # імена індексів у SQLite глобальні — звільняємо їх для нової таблиці
+        conn.exec_driver_sql(f'DROP INDEX IF EXISTS "{name}"')
+    Subscription.__table__.create(conn)
+    cols = ", ".join(f'"{c}"' for c in Subscription.__table__.columns.keys() if c in old_cols)
+    conn.exec_driver_sql(f"INSERT INTO subscriptions ({cols}) SELECT {cols} FROM _subscriptions_old")
+    conn.exec_driver_sql("DROP TABLE _subscriptions_old")
+    conn.exec_driver_sql("PRAGMA legacy_alter_table=OFF")
+
+
+def _make_overrides_nullable(conn: Connection) -> None:
+    """Раніше налаштування жили лише в адресі (NOT NULL). Тепер це перевизначення загальних:
+    робимо колонки nullable і скидаємо в NULL значення, що збігаються з типовими, —
+    тоді для таких адрес почнуть діяти загальні налаштування користувача."""
+    cols = {c["name"]: c for c in inspect(conn).get_columns("subscriptions")}
+    if all(cols[f]["nullable"] for f in PREF_FIELDS):
+        return  # уже зроблено
+    if conn.dialect.name == "postgresql":
+        for f in PREF_FIELDS:
+            conn.execute(text(f"ALTER TABLE subscriptions ALTER COLUMN {f} DROP NOT NULL"))
+            conn.execute(text(f"ALTER TABLE subscriptions ALTER COLUMN {f} DROP DEFAULT"))
+    else:
+        _rebuild_sqlite_subscriptions(conn)
+    for f in PREF_FIELDS:
+        conn.execute(text(f"UPDATE subscriptions SET {f} = NULL WHERE {f} = :v"), {"v": DEFAULT_PREFS[f]})
 
 
 def _migrate(conn: Connection) -> None:
     """Доводить старі таблиці до поточної схеми (create_all сам колонок не додає)."""
     insp = inspect(conn)
     tables = set(insp.get_table_names())
+    if "users" in tables:
+        _add_missing_columns(conn, "users")
     if "subscriptions" in tables:
-        cols = {c["name"] for c in insp.get_columns("subscriptions")}
-        for name, ddl in _NEW_SUBSCRIPTION_COLUMNS.items():
-            if name not in cols:
-                conn.execute(text(f"ALTER TABLE subscriptions ADD COLUMN {name} {ddl}"))
+        _add_missing_columns(conn, "subscriptions")
+        _make_overrides_nullable(conn)
     if "sent_reminders" in tables:
         cols = {c["name"] for c in insp.get_columns("sent_reminders")}
         if "kind" not in cols:
@@ -120,11 +176,41 @@ class Database:
             await s.commit()
 
     # ---------- users / subscriptions ----------
-    async def ensure_user(self, user_id: int) -> None:
+    async def ensure_user(self, user_id: int) -> User:
         async with self.session() as s:
-            if await s.get(User, user_id) is None:
-                s.add(User(id=user_id))
+            user = await s.get(User, user_id)
+            if user is None:
+                user = User(id=user_id)
+                s.add(user)
                 await s.commit()
+            return user
+
+    async def users_by_ids(self, user_ids: set[int]) -> dict[int, User]:
+        if not user_ids:
+            return {}
+        async with self.session() as s:
+            res = await s.scalars(select(User).where(User.id.in_(user_ids)))
+            return {u.id: u for u in res.all()}
+
+    async def update_user(self, user_id: int, **fields) -> None:
+        """Змінює загальні налаштування. Лише поля з PREF_FIELDS."""
+        assert set(fields) <= set(PREF_FIELDS), fields
+        async with self.session() as s:
+            user = await s.get(User, user_id)
+            if user:
+                for k, v in fields.items():
+                    setattr(user, k, v)
+                await s.commit()
+
+    async def reset_overrides(self, user_id: int) -> None:
+        """Прибирає власні налаштування всіх адрес користувача — далі діють загальні."""
+        async with self.session() as s:
+            await s.execute(
+                update(Subscription)
+                .where(Subscription.user_id == user_id)
+                .values({f: None for f in PREF_FIELDS})
+            )
+            await s.commit()
 
     async def add_subscription(self, **fields) -> Subscription:
         async with self.session() as s:

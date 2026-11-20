@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 .vercel/
+
+# локальні інструкції для плагіна security-guidance
+claude-security-guidance.md
