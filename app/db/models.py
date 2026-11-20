@@ -32,8 +32,11 @@ class Subscription(Base):
     source_key: Mapped[str] = mapped_column(String(64), index=True)
     group: Mapped[str] = mapped_column(String(8))
     address: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    remind_minutes: Mapped[int] = mapped_column(Integer, default=30)     # 0 = вимкнено
+    remind_minutes: Mapped[int] = mapped_column(Integer, default=30)     # за скільки хв до відключення; 0 = вимкнено
+    restore_remind_minutes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # до появи світла
     notify_changes: Mapped[bool] = mapped_column(Boolean, default=True)
+    # які години показувати в графіку: "all" — усі, "on" — лише зі світлом, "off" — лише без світла
+    schedule_view: Mapped[str] = mapped_column(String(8), default="all", server_default="all")
 
     user: Mapped[User] = relationship(back_populates="subscriptions")
 
@@ -55,14 +58,15 @@ class ScheduleSnapshot(Base):
 
 
 class SentReminder(Base):
-    """Щоб не нагадувати двічі про одне відключення."""
+    """Щоб не нагадувати двічі про одну подію (вимкнення чи появу світла)."""
 
     __tablename__ = "sent_reminders"
 
     subscription_id: Mapped[int] = mapped_column(
         ForeignKey("subscriptions.id", ondelete="CASCADE"), primary_key=True
     )
-    event_start: Mapped[datetime] = mapped_column(DateTime(), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8), primary_key=True)        # "off" | "on"
+    event_at: Mapped[datetime] = mapped_column(DateTime(), primary_key=True)  # початок або кінець відключення
 
 
 class FsmRecord(Base):

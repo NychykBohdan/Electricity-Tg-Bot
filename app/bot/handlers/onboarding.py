@@ -208,7 +208,8 @@ async def finish(message: Message, user_id: int, title: str, state: FSMContext, 
     await message.answer(
         f"✅ Збережено! Я напишу, якщо графік зміниться, і нагадаю за "
         f"{settings.default_remind_minutes} хв до відключення.\n"
-        "Налаштувати можна в «📍 Мої адреси».",
+        "У «📍 Мої адреси» можна змінити час нагадування і ввімкнути попередження "
+        "про появу світла.",
         reply_markup=kb.main_menu(),
     )
     await message.answer(await render_schedule(db, sub, 0), reply_markup=kb.schedule_kb(sub.id, 0))

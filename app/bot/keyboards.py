@@ -8,7 +8,12 @@ BTN_SUBS = "📍 Мої адреси"
 BTN_ADD = "➕ Додати адресу"
 BTN_HELP = "ℹ️ Допомога"
 
-REMIND_STEPS = [0, 15, 30, 60]
+REMIND_STEPS = [5, 10, 15, 30]  # хвилини; 0 = вимкнено
+# вид нагадування → (поле Subscription, заголовок кнопки, питання у виборі)
+REMIND_KINDS = {
+    "off": ("remind_minutes", "⏰ До відключення", "За скільки попередити, що світло <b>вимкнеться</b>?"),
+    "on": ("restore_remind_minutes", "💡 До появи світла", "За скільки попередити, що світло <b>з'явиться</b>?"),
+}
 TITLE_PRESETS = ["🏠 Дім", "💼 Робота"]
 
 
@@ -83,16 +88,57 @@ def subs_list_kb(subs, prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=btns)
 
 
+# режим показу графіка → (кнопка вибору, коротко для картки адреси)
+SCHEDULE_VIEWS = {
+    "all": ("🟢🔴 Години зі світлом і без", "усі години"),
+    "on": ("🟢 Лише години зі світлом", "лише зі світлом"),
+    "off": ("🔴 Лише години без світла", "лише без світла"),
+}
+
+
+def minutes_label(m: int) -> str:
+    return f"{m} хв" if m else "вимк"
+
+
 def sub_settings_kb(sub) -> InlineKeyboardMarkup:
-    remind = f"{sub.remind_minutes} хв" if sub.remind_minutes else "вимк"
     changes = "увімк" if sub.notify_changes else "вимк"
+    remind_rows = [
+        [B(text=f"{label}: {minutes_label(getattr(sub, field))}", callback_data=f"rm:{kind}:{sub.id}")]
+        for kind, (field, label, _) in REMIND_KINDS.items()
+    ]
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [B(text="📅 Показати графік", callback_data=f"sv:{sub.id}:0")],
-            [B(text=f"⏰ Нагадування: {remind}", callback_data=f"rm:{sub.id}")],
+            [B(text=f"🗓 Показ графіка: {view_label(sub.schedule_view)}", callback_data=f"vw:{sub.id}")],
+            *remind_rows,
             [B(text=f"🔔 Сповіщення про зміни: {changes}", callback_data=f"nc:{sub.id}")],
             [B(text="🗑 Видалити", callback_data=f"del:{sub.id}")],
             [B(text="« До списку", callback_data="subs")],
+        ]
+    )
+
+
+def view_label(view: str) -> str:
+    return SCHEDULE_VIEWS.get(view, SCHEDULE_VIEWS["all"])[1]
+
+
+def view_picker_kb(sub) -> InlineKeyboardMarkup:
+    rows = [
+        [B(text=f"✅ {text}" if view == sub.schedule_view else text, callback_data=f"vs:{sub.id}:{view}")]
+        for view, (text, _) in SCHEDULE_VIEWS.items()
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows + [[B(text="« Назад", callback_data=f"sub:{sub.id}")]])
+
+
+def remind_picker_kb(sub, kind: str) -> InlineKeyboardMarkup:
+    current = getattr(sub, REMIND_KINDS[kind][0])
+    mark = lambda m, t: f"✅ {t}" if m == current else t  # noqa: E731
+    steps = [B(text=mark(m, f"{m} хв"), callback_data=f"rs:{kind}:{sub.id}:{m}") for m in REMIND_STEPS]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            steps,
+            [B(text=mark(0, "🔕 Вимкнено"), callback_data=f"rs:{kind}:{sub.id}:0")],
+            [B(text="« Назад", callback_data=f"sub:{sub.id}")],
         ]
     )
 

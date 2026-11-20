@@ -116,11 +116,26 @@ async def test_onboarding_by_account_and_settings(env):
     sub = (await db.user_subscriptions(42))[0]
     assert sub.title == "Офіс" and sub.group == "4.1" and sub.address == "Особовий рахунок №24100994"
 
-    # налаштування: нагадування 30 → 60, сповіщення вимк
-    await press(f"rm:{sub.id}")
+    # налаштування: до відключення 30 → 10 хв, до появи світла вимк → 15 хв, сповіщення вимк
+    assert sub.restore_remind_minutes == 0
+    await press(f"rm:off:{sub.id}")
+    assert "вимкнеться" in s.texts()[-1]
+    await press(f"rs:off:{sub.id}:10")
+    await press(f"rm:on:{sub.id}")
+    assert "з'явиться" in s.texts()[-1]
+    await press(f"rs:on:{sub.id}:15")
+    await press(f"rs:on:{sub.id}:45")   # не з переліку — ігнорується
     await press(f"nc:{sub.id}")
     sub = await db.get_subscription(sub.id, 42)
-    assert sub.remind_minutes == 60 and sub.notify_changes is False
+    assert sub.remind_minutes == 10 and sub.restore_remind_minutes == 15 and sub.notify_changes is False
+
+    # вигляд графіка: усі години → лише без світла
+    assert sub.schedule_view == "all"
+    await press(f"vw:{sub.id}")
+    assert "Які години показувати" in s.texts()[-1]
+    await press(f"vs:{sub.id}:off")
+    await press(f"vs:{sub.id}:bogus")   # невідомий режим — ігнорується
+    assert (await db.get_subscription(sub.id, 42)).schedule_view == "off"
 
     # кнопка меню посеред додавання адреси скидає діалог
     await msg("➕ Додати адресу")

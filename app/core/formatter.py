@@ -86,7 +86,9 @@ def format_schedule(
     context_days: list[DaySchedule] | None = None,
     updated_at: datetime | None = None,
     target: date | None = None,
+    view: str = "all",
 ) -> str:
+    """view: "all" — години зі світлом і без, "on" — лише зі світлом, "off" — лише без світла."""
     lines = [f"📍 <b>{escape(title)}</b>", f"<i>{escape(subtitle)}</i>", ""]
     if day is None:
         if target:
@@ -107,12 +109,22 @@ def format_schedule(
         if not day.outages:
             lines.append("✅ Відключень не заплановано")
         else:
+            on_minutes = 1440 - day.total_off_minutes
             for is_off, it in segments(day):
-                if is_off:
+                if is_off and view != "on":
                     lines.append(f"🔴 <b>{interval_str(it)}</b>  без світла")
-                else:
+                elif not is_off and view == "on":
+                    lines.append(f"🟢 <b>{interval_str(it)}</b>  зі світлом")
+                elif not is_off and view == "all":
                     lines.append(f"🟢 {interval_str(it)}")
-            lines += ["", timeline(day), "", f"⚡ Без світла: <b>{duration(day.total_off_minutes)}</b>"]
+            if view == "on" and not on_minutes:
+                lines.append("🔴 Світла не буде цілу добу")
+            summary = (
+                f"💡 Зі світлом: <b>{duration(on_minutes)}</b>"
+                if view == "on"
+                else f"⚡ Без світла: <b>{duration(day.total_off_minutes)}</b>"
+            )
+            lines += ["", timeline(day), "", summary]
 
     if day.day == now.date():
         lines += ["", now_line(context_days or [day], now)]
@@ -121,7 +133,7 @@ def format_schedule(
     return "\n".join(lines)
 
 
-def format_change(title: str, subtitle: str, ch: DayChange, now: datetime) -> str:
+def format_change(title: str, subtitle: str, ch: DayChange, now: datetime, view: str = "all") -> str:
     label = day_label(ch.new.day, now.date())
     head = f"📍 <b>{escape(title)}</b> · <i>{escape(subtitle)}</i>\n"
 
@@ -138,7 +150,7 @@ def format_change(title: str, subtitle: str, ch: DayChange, now: datetime) -> st
         if ch.became_on:
             head += "➖ Скасовано: " + ", ".join(interval_str(i) for i in ch.became_on) + "\n"
 
-    body = format_schedule(title=title, subtitle=subtitle, day=ch.new, now=now)
+    body = format_schedule(title=title, subtitle=subtitle, day=ch.new, now=now, view=view)
     # прибираємо з body дубль заголовка і дати
     body = "\n".join(body.split("\n")[5:])
     return head + "\n" + body
@@ -150,6 +162,15 @@ def format_reminder(title: str, ev: Event, now: datetime) -> str:
         f"⏰ <b>Відключення через {duration(left)}</b>\n"
         f"📍 {escape(title)}\n"
         f"🔴 {ev.start:%H:%M}–{ev.end:%H:%M} ({duration(int((ev.end - ev.start).total_seconds() // 60))})"
+    )
+
+
+def format_restore_reminder(title: str, ev: Event, now: datetime) -> str:
+    left = max(1, round((ev.end - now).total_seconds() / 60))
+    return (
+        f"💡 <b>Світло з'явиться через {duration(left)}</b>\n"
+        f"📍 {escape(title)}\n"
+        f"🟢 о {ev.end:%H:%M} за графіком (відключення {ev.start:%H:%M}–{ev.end:%H:%M})"
     )
 
 

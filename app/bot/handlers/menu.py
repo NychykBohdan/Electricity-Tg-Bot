@@ -17,7 +17,7 @@ router = Router(name="menu")
 HELP = (
     "<b>Як користуватись</b>\n\n"
     "📅 <b>Графік</b> — відключення на сьогодні й завтра\n"
-    "📍 <b>Мої адреси</b> — нагадування, сповіщення, видалення\n"
+    "📍 <b>Мої адреси</b> — нагадування, сповіщення, вигляд графіка, видалення\n"
     "➕ <b>Додати адресу</b> — можна стежити за кількома (дім, робота…)\n\n"
     "Я перевіряю графіки кожні кілька хвилин і пишу, щойно щось змінюється.\n\n"
     "⚠️ Це тестовий проєкт (так і задумано). Не орієнтуйся на нього як на надійне "
@@ -111,17 +111,55 @@ async def cb_sub(cb: CallbackQuery, db: Database) -> None:
         await cb.message.edit_text(sub_card(sub), reply_markup=kb.sub_settings_kb(sub))
 
 
+@router.callback_query(F.data.startswith("vw:"))
+async def cb_view(cb: CallbackQuery, db: Database) -> None:
+    """Відкриває вибір: які години показувати в графіку."""
+    sub = await db.get_subscription(int(cb.data.split(":")[1]), cb.from_user.id)
+    await cb.answer()
+    if sub:
+        await cb.message.edit_text(
+            f"{sub_card(sub)}\n\nЯкі години показувати в графіку?", reply_markup=kb.view_picker_kb(sub)
+        )
+
+
+@router.callback_query(F.data.startswith("vs:"))
+async def cb_view_set(cb: CallbackQuery, db: Database) -> None:
+    """Зберігає режим показу (vs:<id>:<all|on|off>) і повертає до налаштувань адреси."""
+    _, sub_id, view = cb.data.split(":")
+    sub = await db.get_subscription(int(sub_id), cb.from_user.id)
+    if not sub or view not in kb.SCHEDULE_VIEWS:
+        return await cb.answer()
+    await db.update_subscription(sub.id, schedule_view=view)
+    sub.schedule_view = view
+    await cb.answer(f"Графік: {kb.view_label(view)}")
+    await cb.message.edit_text(sub_card(sub), reply_markup=kb.sub_settings_kb(sub))
+
+
 @router.callback_query(F.data.startswith("rm:"))
 async def cb_remind(cb: CallbackQuery, db: Database) -> None:
-    sub = await db.get_subscription(int(cb.data.split(":")[1]), cb.from_user.id)
-    if not sub:
+    """Відкриває вибір: за скільки хвилин попереджати (rm:off:<id> або rm:on:<id>)."""
+    _, kind, sub_id = cb.data.split(":")
+    sub = await db.get_subscription(int(sub_id), cb.from_user.id)
+    await cb.answer()
+    if sub and kind in kb.REMIND_KINDS:
+        await cb.message.edit_text(
+            f"{sub_card(sub)}\n\n{kb.REMIND_KINDS[kind][2]}", reply_markup=kb.remind_picker_kb(sub, kind)
+        )
+
+
+@router.callback_query(F.data.startswith("rs:"))
+async def cb_remind_set(cb: CallbackQuery, db: Database) -> None:
+    """Зберігає вибір (rs:<kind>:<id>:<хвилини>) і повертає до налаштувань адреси."""
+    _, kind, sub_id, minutes = cb.data.split(":")
+    sub = await db.get_subscription(int(sub_id), cb.from_user.id)
+    value = int(minutes)
+    if not sub or kind not in kb.REMIND_KINDS or (value and value not in kb.REMIND_STEPS):
         return await cb.answer()
-    steps = kb.REMIND_STEPS
-    nxt = steps[(steps.index(sub.remind_minutes) + 1) % len(steps)] if sub.remind_minutes in steps else 30
-    await db.update_subscription(sub.id, remind_minutes=nxt)
-    sub.remind_minutes = nxt
-    await cb.answer(f"Нагадування: {nxt} хв" if nxt else "Нагадування вимкнено")
-    await cb.message.edit_reply_markup(reply_markup=kb.sub_settings_kb(sub))
+    field, label, _ = kb.REMIND_KINDS[kind]
+    await db.update_subscription(sub.id, **{field: value})
+    setattr(sub, field, value)
+    await cb.answer(f"{label}: {kb.minutes_label(value)}")
+    await cb.message.edit_text(sub_card(sub), reply_markup=kb.sub_settings_kb(sub))
 
 
 @router.callback_query(F.data.startswith("nc:"))

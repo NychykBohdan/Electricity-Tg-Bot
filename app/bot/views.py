@@ -24,4 +24,5 @@ async def render_schedule(db: Database, sub: Subscription, day_idx: int) -> str:
         target=target,
         context_days=[snapshot_to_day(r) for r in rows.values()],
         updated_at=from_db(row.updated_at).astimezone(TZ) if row else None,
+        view=sub.schedule_view,
     )

@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import Connection, delete, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -45,6 +45,28 @@ def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(u)
 
 
+_NEW_SUBSCRIPTION_COLUMNS = {
+    "restore_remind_minutes": "INTEGER NOT NULL DEFAULT 0",
+    "schedule_view": "VARCHAR(8) NOT NULL DEFAULT 'all'",
+}
+
+
+def _migrate(conn: Connection) -> None:
+    """Доводить старі таблиці до поточної схеми (create_all сам колонок не додає)."""
+    insp = inspect(conn)
+    tables = set(insp.get_table_names())
+    if "subscriptions" in tables:
+        cols = {c["name"] for c in insp.get_columns("subscriptions")}
+        for name, ddl in _NEW_SUBSCRIPTION_COLUMNS.items():
+            if name not in cols:
+                conn.execute(text(f"ALTER TABLE subscriptions ADD COLUMN {name} {ddl}"))
+    if "sent_reminders" in tables:
+        cols = {c["name"] for c in insp.get_columns("sent_reminders")}
+        if "kind" not in cols:
+            # лише журнал «що вже надіслано» на сьогодні/завтра — простіше створити заново
+            SentReminder.__table__.drop(conn)
+
+
 class Database:
     def __init__(self, url: str):
         self.engine: AsyncEngine = make_engine(url)
@@ -54,6 +76,7 @@ class Database:
 
     async def create_all(self) -> None:
         async with self.engine.begin() as conn:
+            await conn.run_sync(_migrate)
             await conn.run_sync(Base.metadata.create_all)
 
     async def close(self) -> None:
@@ -205,18 +228,18 @@ class Database:
         async with self.session() as s:
             await s.execute(delete(ScheduleSnapshot).where(ScheduleSnapshot.day < before))
             await s.execute(
-                delete(SentReminder).where(SentReminder.event_start < datetime.combine(before, datetime.min.time()))
+                delete(SentReminder).where(SentReminder.event_at < datetime.combine(before, datetime.min.time()))
             )
             await s.commit()
 
     # ---------- reminders ----------
-    async def try_mark_reminder(self, sub_id: int, event_start: datetime) -> bool:
+    async def try_mark_reminder(self, sub_id: int, kind: str, event_at: datetime) -> bool:
         """True, якщо нагадування ще не надсилали (і позначає його надісланим)."""
         async with self.session() as s:
-            key = (sub_id, to_db(event_start))
+            key = (sub_id, kind, to_db(event_at))
             if await s.get(SentReminder, key):
                 return False
-            s.add(SentReminder(subscription_id=sub_id, event_start=key[1]))
+            s.add(SentReminder(subscription_id=sub_id, kind=kind, event_at=key[2]))
             await s.commit()
             return True
 

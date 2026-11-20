@@ -106,6 +106,18 @@ def test_format_outputs():
     assert "Сьогодні, пн 9 листопада" in text
     assert "06:00–09:30" in text and "Без світла: <b>6 год 30 хв</b>" in text
 
+    # лише години без світла
+    off_only = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now, view="off")
+    assert "🔴 <b>06:00–09:30</b>" in off_only and "🟢 09:30–16:00" not in off_only
+    # лише години зі світлом
+    on_only = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now, view="on")
+    assert "🟢 <b>09:30–16:00</b>  зі світлом" in on_only and "🔴 <b>06:00" not in on_only
+    assert "Зі світлом: <b>17 год 30 хв</b>" in on_only
+    full_off = DaySchedule(D, DayStatus.SCHEDULE, (Interval(0, 1440),))
+    assert "Світла не буде цілу добу" in format_schedule(
+        title="Дім", subtitle=subtitle, day=full_off, now=now, view="on"
+    )
+
     old = DaySchedule(D, DayStatus.SCHEDULE, (Interval(360, 570),))
     msg = format_change("Дім", subtitle, compare(old, day), now)
     print("\n" + msg)
