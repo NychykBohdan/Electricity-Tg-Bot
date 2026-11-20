@@ -1,0 +1,157 @@
+"""Формування повідомлень (Telegram HTML)."""
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from html import escape
+
+from app.core.diff import ChangeKind, DayChange
+from app.core.models import DaySchedule, DayStatus, Event, Interval, to_events
+
+WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "нд"]
+MONTHS = [
+    "січня", "лютого", "березня", "квітня", "травня", "червня",
+    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+]
+
+
+def hm(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def interval_str(it: Interval) -> str:
+    return f"{hm(it.start)}–{hm(it.end)}"
+
+
+def duration(minutes: int) -> str:
+    h, m = divmod(max(0, minutes), 60)
+    if h and m:
+        return f"{h} год {m} хв"
+    if h:
+        return f"{h} год"
+    return f"{m} хв"
+
+
+def day_label(d: date, today: date) -> str:
+    prefix = {0: "Сьогодні", 1: "Завтра"}.get((d - today).days)
+    base = f"{WEEKDAYS[d.weekday()]} {d.day} {MONTHS[d.month - 1]}"
+    return f"{prefix}, {base}" if prefix else base.capitalize()
+
+
+def segments(day: DaySchedule) -> list[tuple[bool, Interval]]:
+    """Розбиває добу на (is_off, інтервал) — і години зі світлом, і без."""
+    out: list[tuple[bool, Interval]] = []
+    cur = 0
+    for it in day.outages:
+        if it.start > cur:
+            out.append((False, Interval(cur, it.start)))
+        out.append((True, it))
+        cur = it.end
+    if cur < 1440:
+        out.append((False, Interval(cur, 1440)))
+    return out
+
+
+def timeline(day: DaySchedule) -> str:
+    """Шкала доби: 1 символ = 1 година."""
+    cells = []
+    for h in range(24):
+        a, b = h * 60, h * 60 + 60
+        off = sum(max(0, min(b, it.end) - max(a, it.start)) for it in day.outages)
+        cells.append("█" if off == 60 else "▓" if off else "░")
+    bar = "".join(cells)
+    scale = "0     6     12    18   24"
+    return f"<code>{bar}\n{scale}</code>"
+
+
+def now_line(days: list[DaySchedule], now: datetime) -> str:
+    events: list[Event] = to_events(days)
+    for ev in events:
+        if ev.start <= now < ev.end:
+            left = int((ev.end - now).total_seconds() // 60)
+            return f"🔴 <b>Зараз світла немає</b> · увімкнуть о {ev.end:%H:%M} (через {duration(left)})"
+    for ev in events:
+        if ev.start > now:
+            left = int((ev.start - now).total_seconds() // 60)
+            when = "" if ev.start.date() == now.date() else "завтра "
+            return f"🟢 Зараз світло є · відключення {when}о {ev.start:%H:%M} (через {duration(left)})"
+    return "🟢 Зараз світло є · відключень найближчим часом не заплановано"
+
+
+def format_schedule(
+    *,
+    title: str,
+    subtitle: str,
+    day: DaySchedule | None,
+    now: datetime,
+    context_days: list[DaySchedule] | None = None,
+    updated_at: datetime | None = None,
+    target: date | None = None,
+) -> str:
+    lines = [f"📍 <b>{escape(title)}</b>", f"<i>{escape(subtitle)}</i>", ""]
+    if day is None:
+        if target:
+            lines += [f"📅 <b>{day_label(target, now.date())}</b>", ""]
+        lines.append("⏳ Графік ще не опубліковано. Я напишу, щойно він з'явиться.")
+        return "\n".join(lines)
+
+    lines.append(f"📅 <b>{day_label(day.day, now.date())}</b>")
+    lines.append("")
+
+    if day.status == DayStatus.WAITING:
+        lines.append("⏳ Графік ще не опубліковано")
+    elif day.status == DayStatus.NO_OUTAGES:
+        lines.append("✅ Відключень не заплановано")
+    elif day.status == DayStatus.EMERGENCY:
+        lines.append("⚠️ <b>Діють аварійні відключення.</b> Графік може не виконуватись.")
+    else:
+        if not day.outages:
+            lines.append("✅ Відключень не заплановано")
+        else:
+            for is_off, it in segments(day):
+                if is_off:
+                    lines.append(f"🔴 <b>{interval_str(it)}</b>  без світла")
+                else:
+                    lines.append(f"🟢 {interval_str(it)}")
+            lines += ["", timeline(day), "", f"⚡ Без світла: <b>{duration(day.total_off_minutes)}</b>"]
+
+    if day.day == now.date():
+        lines += ["", now_line(context_days or [day], now)]
+    if updated_at:
+        lines += ["", f"<i>Оновлено о {updated_at:%H:%M}</i>"]
+    return "\n".join(lines)
+
+
+def format_change(title: str, subtitle: str, ch: DayChange, now: datetime) -> str:
+    label = day_label(ch.new.day, now.date())
+    head = f"📍 <b>{escape(title)}</b> · <i>{escape(subtitle)}</i>\n"
+
+    if ch.kind == ChangeKind.PUBLISHED:
+        head += f"📅 <b>Опубліковано графік: {label}</b>\n"
+    else:
+        head += f"🔄 <b>Графік змінився: {label}</b>\n"
+        if ch.new.status == DayStatus.EMERGENCY:
+            head += "⚠️ Діють аварійні відключення!\n"
+        elif ch.new.status == DayStatus.NO_OUTAGES and ch.status_changed:
+            head += "✅ Відключення скасовано\n"
+        if ch.became_off:
+            head += "➕ Додано відключення: " + ", ".join(interval_str(i) for i in ch.became_off) + "\n"
+        if ch.became_on:
+            head += "➖ Скасовано: " + ", ".join(interval_str(i) for i in ch.became_on) + "\n"
+
+    body = format_schedule(title=title, subtitle=subtitle, day=ch.new, now=now)
+    # прибираємо з body дубль заголовка і дати
+    body = "\n".join(body.split("\n")[5:])
+    return head + "\n" + body
+
+
+def format_reminder(title: str, ev: Event, now: datetime) -> str:
+    left = max(1, round((ev.start - now).total_seconds() / 60))
+    return (
+        f"⏰ <b>Відключення через {duration(left)}</b>\n"
+        f"📍 {escape(title)}\n"
+        f"🔴 {ev.start:%H:%M}–{ev.end:%H:%M} ({duration(int((ev.end - ev.start).total_seconds() // 60))})"
+    )
+
+
+def tomorrow(d: date) -> date:
+    return d + timedelta(days=1)

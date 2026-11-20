@@ -1,0 +1,20 @@
+[project]
+name = "svitlo-bot"
+version = "0.2.0"
+description = "Telegram-бот графіків відключень світла (Прикарпаттяобленерго)"
+requires-python = ">=3.12"
+# Тримай у синхроні з requirements.txt
+dependencies = [
+    "aiogram>=3.13,<4",
+    "aiohttp>=3.9",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "asyncpg>=0.29",
+    "pydantic-settings>=2.3",
+    "fastapi>=0.115",
+    "tzdata>=2024.1",  # на Vercel може не бути системної бази часових поясів
+]
+
+[tool.vercel]
+# Явно, бо інакше Vercel може взяти app/main.py (long polling) за вхідну точку
+entrypoint = "app.web:app"

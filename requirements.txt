@@ -1,0 +1,9 @@
+# Тримай у синхроні з [project].dependencies у pyproject.toml (Vercel читає pyproject, Docker — цей файл)
+aiogram>=3.13,<4
+aiohttp>=3.9
+sqlalchemy[asyncio]>=2.0
+aiosqlite>=0.20
+asyncpg>=0.29
+pydantic-settings>=2.3
+fastapi>=0.115
+tzdata>=2024.1
