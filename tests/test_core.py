@@ -6,7 +6,7 @@ from app.collectors.base import CollectorError
 from app.collectors.prykarpattya import parse_queue
 from app.config import TZ
 from app.core.diff import ChangeKind, compare
-from app.core.formatter import format_change, format_schedule, now_line, timeline
+from app.core.formatter import SEPARATOR, format_change, format_schedule, now_line
 from app.core.models import DaySchedule, DayStatus, Interval, to_events
 
 D = date(2026, 11, 9)
@@ -91,27 +91,41 @@ def test_now_line():
     assert "увімкнуть о 19:00 (через 2 год)" in now_line([day], during)
 
 
-def test_timeline_partial_hours():
-    day = DaySchedule(D, DayStatus.SCHEDULE, (Interval(360, 570),))  # 06:00–09:30
-    bar = timeline(day).split("\n")[0].removeprefix("<code>")
-    assert bar[5] == "░" and bar[6] == "█" and bar[9] == "▓" and len(bar) == 24
-
-
 def test_format_outputs():
     now = datetime(2026, 11, 9, 14, 30, tzinfo=TZ)
     day = DaySchedule(D, DayStatus.SCHEDULE, (Interval(360, 570), Interval(960, 1140)))
     subtitle = "Івано-Франківськ та область · графік вимкнення світла за групою 3.2"
-    text = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now)
+    text = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now, updated_at=now.replace(minute=25))
     print("\n" + text)
-    assert "Сьогодні, пн 9 листопада" in text
-    assert "06:00–09:30" in text and "Без світла: <b>6 год 30 хв</b>" in text
-    # минулі періоди закреслені, поточний і майбутні — ні; між періодами порожній рядок
-    assert "🟢 <s>00:00–06:00</s>\n\n🔴 <s>06:00–09:30  без світла</s>\n\n🟢 09:30–16:00\n\n" in text
-    assert "🔴 <b>16:00–19:00</b>  без світла" in text
+    # три блоки через роздільник: адреса / перелік годин / решта;
+    # минулі періоди закреслені; підсумок за день — поруч із часом оновлення; шкали доби немає
+    assert text == f"""📍 <b>Дім</b>
+<i>{subtitle}</i>
+{SEPARATOR}
+📅 <b>Сьогодні, пн 9 листопада</b>
 
-    # завтра нічого не закреслено
+🟢 <s>00:00–06:00</s>
+
+🔴 <s>06:00–09:30  без світла</s>
+
+🟢 09:30–16:00
+
+🔴 <b>16:00–19:00</b>  без світла
+
+🟢 19:00–24:00
+{SEPARATOR}
+🟢 Зараз світло є · відключення о 16:00 (через 1 год 30 хв)
+
+⚡️ Сьогодні без світла: <b>6 год 30 хв</b>
+<i>Оновлено о 14:25</i>"""
+
+    # завтра нічого не закреслено, підсумок — «Завтра без світла»
     tomorrow_text = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now - timedelta(days=1))
-    assert "<s>" not in tomorrow_text
+    assert "<s>" not in tomorrow_text and "⚡️ Завтра без світла: <b>6 год 30 хв</b>" in tomorrow_text
+    assert tomorrow_text.count(SEPARATOR) == 2 and "Зараз" not in tomorrow_text
+    # графік ще не опубліковано — лише два блоки
+    waiting = format_schedule(title="Дім", subtitle=subtitle, day=None, now=now, target=D)
+    assert waiting.count(SEPARATOR) == 1 and waiting.endswith("Я напишу, щойно він з'явиться.")
 
     # лише години без світла
     off_only = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now, view="off")
@@ -119,7 +133,7 @@ def test_format_outputs():
     # лише години зі світлом
     on_only = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now, view="on")
     assert "🟢 <b>09:30–16:00</b>  зі світлом" in on_only and "🔴 <b>06:00" not in on_only
-    assert "Зі світлом: <b>17 год 30 хв</b>" in on_only
+    assert "💡 Сьогодні зі світлом: <b>17 год 30 хв</b>" in on_only
     full_off = DaySchedule(D, DayStatus.SCHEDULE, (Interval(0, 1440),))
     assert "Світла не буде цілу добу" in format_schedule(
         title="Дім", subtitle=subtitle, day=full_off, now=now, view="on"
@@ -129,6 +143,7 @@ def test_format_outputs():
     msg = format_change("Дім", subtitle, compare(old, day), now)
     print("\n" + msg)
     assert "Графік змінився" in msg and "➕ Додано відключення: 16:00–19:00" in msg
+    assert msg.count(SEPARATOR) == 2 and msg.endswith("⚡️ Сьогодні без світла: <b>6 год 30 хв</b>")
 
 
 def test_period_now():
@@ -146,7 +161,7 @@ def test_period_now():
         "🔴 <b>06:00–09:30</b>  без світла", "🔴 <b>16:00–19:00</b>  без світла",
     ]
     assert periods(fmt(at(20), view="off")) == ["✅ Сьогодні відключень більше немає"]
-    assert "Без світла: <b>6 год 30 хв</b>" in fmt(at(20))           # підсумок за добу лишається
+    assert "⚡️ Сьогодні без світла: <b>6 год 30 хв</b>" in fmt(at(20))           # підсумок за добу лишається
     # графік на завтра — завжди повний
     assert len(periods(fmt(at(14) - timedelta(days=1)))) == 5
     # у повідомленні про зміну — так само

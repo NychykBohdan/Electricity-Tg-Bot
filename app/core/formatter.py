@@ -51,18 +51,6 @@ def segments(day: DaySchedule) -> list[tuple[bool, Interval]]:
     return out
 
 
-def timeline(day: DaySchedule) -> str:
-    """Шкала доби: 1 символ = 1 година."""
-    cells = []
-    for h in range(24):
-        a, b = h * 60, h * 60 + 60
-        off = sum(max(0, min(b, it.end) - max(a, it.start)) for it in day.outages)
-        cells.append("█" if off == 60 else "▓" if off else "░")
-    bar = "".join(cells)
-    scale = "0     6     12    18   24"
-    return f"<code>{bar}\n{scale}</code>"
-
-
 def now_line(days: list[DaySchedule], now: datetime) -> str:
     events: list[Event] = to_events(days)
     for ev in events:
@@ -77,6 +65,67 @@ def now_line(days: list[DaySchedule], now: datetime) -> str:
     return "🟢 Зараз світло є · відключень найближчим часом не заплановано"
 
 
+SEPARATOR = "----------------------"
+
+
+def day_word(d: date, today: date) -> str:
+    return {0: "Сьогодні", 1: "Завтра"}.get((d - today).days, f"{d.day} {MONTHS[d.month - 1]}")
+
+
+def sections(*parts: list[str]) -> str:
+    """Склеює блоки повідомлення через горизонтальний роздільник; порожні блоки пропускає."""
+    return f"\n{SEPARATOR}\n".join("\n".join(p) for p in parts if p)
+
+
+def hours_block(day: DaySchedule, now: datetime, view: str = "all", period: str = "day") -> tuple[list[str], str | None]:
+    """Перелік періодів дня і підсумок («⚡️ Сьогодні без світла: 9 год»; None — якщо рахувати нічого).
+
+    view: "all" — години зі світлом і без, "on" — лише зі світлом, "off" — лише без світла.
+    period: "day" — уся доба, "now" — лише поточний і наступний період (для сьогодні)."""
+    if day.status == DayStatus.WAITING:
+        return ["⏳ Графік ще не опубліковано"], None
+    if day.status == DayStatus.EMERGENCY:
+        return ["⚠️ <b>Діють аварійні відключення.</b> Графік може не виконуватись."], None
+    if day.status == DayStatus.NO_OUTAGES or not day.outages:
+        return ["✅ Відключень не заплановано"], None
+
+    lines: list[str] = []
+    on_minutes = 1440 - day.total_off_minutes
+    # хвилина доби «зараз» — лише для сьогодні; для завтра нічого не закреслюємо
+    now_min = now.hour * 60 + now.minute if day.day == now.date() else -1
+    rows: list[tuple[bool, str]] = []  # (уже минуло, рядок)
+    for is_off, it in segments(day):
+        if (view == "on" and is_off) or (view == "off" and not is_off):
+            continue
+        icon = "🔴" if is_off else "🟢"
+        note = "  без світла" if is_off else ("  зі світлом" if view == "on" else "")
+        if it.end <= now_min:  # уже минуло — закреслюємо
+            rows.append((True, f"{icon} <s>{interval_str(it)}{note}</s>"))
+        elif is_off or view == "on":
+            rows.append((False, f"{icon} <b>{interval_str(it)}</b>{note}"))
+        else:
+            rows.append((False, f"{icon} {interval_str(it)}"))
+    if period == "now" and now_min >= 0:
+        # лише поточний і наступний період; на завтра графік завжди повний
+        rows = [r for r in rows if not r[0]][:2]
+        if not rows and on_minutes:
+            lines.append("🔴 Сьогодні світла вже не буде" if view == "on" else "✅ Сьогодні відключень більше немає")
+    for i, (_, row) in enumerate(rows):
+        if i:
+            lines.append("")  # порожній рядок між періодами — щоб легше читалось
+        lines.append(row)
+    if view == "on" and not on_minutes:
+        lines.append("🔴 Світла не буде цілу добу")
+
+    word = day_word(day.day, now.date())
+    summary = (
+        f"💡 {word} зі світлом: <b>{duration(on_minutes)}</b>"
+        if view == "on"
+        else f"⚡️ {word} без світла: <b>{duration(day.total_off_minutes)}</b>"
+    )
+    return lines, summary
+
+
 def format_schedule(
     *,
     title: str,
@@ -89,94 +138,51 @@ def format_schedule(
     view: str = "all",
     period: str = "day",
 ) -> str:
-    """view: "all" — години зі світлом і без, "on" — лише зі світлом, "off" — лише без світла.
-    period: "day" — уся доба, "now" — лише поточний і наступний період (для сьогодні)."""
-    lines = [f"📍 <b>{escape(title)}</b>", f"<i>{escape(subtitle)}</i>", ""]
+    """Графік на день, трьома блоками через роздільник:
+    адреса / дата й перелік годин / що зараз, підсумок за день, час оновлення."""
+    head = [f"📍 <b>{escape(title)}</b>", f"<i>{escape(subtitle)}</i>"]
     if day is None:
-        if target:
-            lines += [f"📅 <b>{day_label(target, now.date())}</b>", ""]
-        lines.append("⏳ Графік ще не опубліковано. Я напишу, щойно він з'явиться.")
-        return "\n".join(lines)
+        hours = [f"📅 <b>{day_label(target, now.date())}</b>", ""] if target else []
+        return sections(head, hours + ["⏳ Графік ще не опубліковано. Я напишу, щойно він з'явиться."])
 
-    lines.append(f"📅 <b>{day_label(day.day, now.date())}</b>")
-    lines.append("")
+    rows, summary = hours_block(day, now, view, period)
+    hours = [f"📅 <b>{day_label(day.day, now.date())}</b>", "", *rows]
 
-    if day.status == DayStatus.WAITING:
-        lines.append("⏳ Графік ще не опубліковано")
-    elif day.status == DayStatus.NO_OUTAGES:
-        lines.append("✅ Відключень не заплановано")
-    elif day.status == DayStatus.EMERGENCY:
-        lines.append("⚠️ <b>Діють аварійні відключення.</b> Графік може не виконуватись.")
-    else:
-        if not day.outages:
-            lines.append("✅ Відключень не заплановано")
-        else:
-            on_minutes = 1440 - day.total_off_minutes
-            # хвилина доби «зараз» — лише для сьогодні; для завтра нічого не закреслюємо
-            now_min = now.hour * 60 + now.minute if day.day == now.date() else -1
-            rows: list[tuple[bool, str]] = []  # (уже минуло, рядок)
-            for is_off, it in segments(day):
-                if (view == "on" and is_off) or (view == "off" and not is_off):
-                    continue
-                icon = "🔴" if is_off else "🟢"
-                note = "  без світла" if is_off else ("  зі світлом" if view == "on" else "")
-                passed = it.end <= now_min
-                if passed:  # уже минуло — закреслюємо
-                    rows.append((True, f"{icon} <s>{interval_str(it)}{note}</s>"))
-                elif is_off or view == "on":
-                    rows.append((False, f"{icon} <b>{interval_str(it)}</b>{note}"))
-                else:
-                    rows.append((False, f"{icon} {interval_str(it)}"))
-            if period == "now" and now_min >= 0:
-                # лише поточний і наступний період; на завтра графік завжди повний
-                rows = [r for r in rows if not r[0]][:2]
-                if not rows and on_minutes:
-                    lines.append(
-                        "🔴 Сьогодні світла вже не буде" if view == "on" else "✅ Сьогодні відключень більше немає"
-                    )
-            for i, (_, row) in enumerate(rows):
-                if i:
-                    lines.append("")  # порожній рядок між періодами — щоб легше читалось
-                lines.append(row)
-            if view == "on" and not on_minutes:
-                lines.append("🔴 Світла не буде цілу добу")
-            summary = (
-                f"💡 Зі світлом: <b>{duration(on_minutes)}</b>"
-                if view == "on"
-                else f"⚡ Без світла: <b>{duration(day.total_off_minutes)}</b>"
-            )
-            lines += ["", timeline(day), "", summary]
-
+    rest: list[str] = []
     if day.day == now.date():
-        lines += ["", now_line(context_days or [day], now)]
-    if updated_at:
-        lines += ["", f"<i>Оновлено о {updated_at:%H:%M}</i>"]
-    return "\n".join(lines)
+        rest.append(now_line(context_days or [day], now))
+    tail = [x for x in (summary, f"<i>Оновлено о {updated_at:%H:%M}</i>" if updated_at else None) if x]
+    if tail:
+        rest += ([""] if rest else []) + tail   # підсумок і час оновлення — поруч
+    return sections(head, hours, rest)
 
 
 def format_change(
     title: str, subtitle: str, ch: DayChange, now: datetime, view: str = "all", period: str = "day"
 ) -> str:
     label = day_label(ch.new.day, now.date())
-    head = f"📍 <b>{escape(title)}</b> · <i>{escape(subtitle)}</i>\n"
+    head = [f"📍 <b>{escape(title)}</b> · <i>{escape(subtitle)}</i>"]
 
     if ch.kind == ChangeKind.PUBLISHED:
-        head += f"📅 <b>Опубліковано графік: {label}</b>\n"
+        head.append(f"📅 <b>Опубліковано графік: {label}</b>")
     else:
-        head += f"🔄 <b>Графік змінився: {label}</b>\n"
+        head.append(f"🔄 <b>Графік змінився: {label}</b>")
         if ch.new.status == DayStatus.EMERGENCY:
-            head += "⚠️ Діють аварійні відключення!\n"
+            head.append("⚠️ Діють аварійні відключення!")
         elif ch.new.status == DayStatus.NO_OUTAGES and ch.status_changed:
-            head += "✅ Відключення скасовано\n"
+            head.append("✅ Відключення скасовано")
         if ch.became_off:
-            head += "➕ Додано відключення: " + ", ".join(interval_str(i) for i in ch.became_off) + "\n"
+            head.append("➕ Додано відключення: " + ", ".join(interval_str(i) for i in ch.became_off))
         if ch.became_on:
-            head += "➖ Скасовано: " + ", ".join(interval_str(i) for i in ch.became_on) + "\n"
+            head.append("➖ Скасовано: " + ", ".join(interval_str(i) for i in ch.became_on))
 
-    body = format_schedule(title=title, subtitle=subtitle, day=ch.new, now=now, view=view, period=period)
-    # прибираємо з body дубль заголовка і дати
-    body = "\n".join(body.split("\n")[5:])
-    return head + "\n" + body
+    rows, summary = hours_block(ch.new, now, view, period)
+    rest: list[str] = []
+    if ch.new.day == now.date():
+        rest.append(now_line([ch.new], now))
+    if summary:
+        rest += ([""] if rest else []) + [summary]
+    return sections(head, rows, rest)
 
 
 def format_reminder(title: str, ev: Event, now: datetime) -> str:
