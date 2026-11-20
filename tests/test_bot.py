@@ -142,7 +142,7 @@ async def test_onboarding_by_account_and_settings(env):
     await msg("📅 Графік")
     assert "Офіс" in s.texts()[-1]
     await press(f"sv:{sub.id}:1")
-    assert "(завтра)" in s.texts()[-1] and "ще не опубліковано" in s.texts()[-1]
+    assert "Завтра" in s.texts()[-1] and "ще не опубліковано" in s.texts()[-1]
 
     await press(f"delok:{sub.id}")
     assert await db.user_subscriptions(42) == []
