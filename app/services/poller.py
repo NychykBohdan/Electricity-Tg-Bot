@@ -63,7 +63,7 @@ class Poller:
         for sub in await self.db.subscriptions_for(key, group):
             if not sub.notify_changes:
                 continue
-            text = format_change(sub.title, sub_subtitle(sub.city_key, sub.group), ch, now, sub.schedule_view)
+            text = format_change(sub.title, sub.group, ch, now, sub.schedule_view)
             day_idx = (ch.new.day - now.date()).days
             await self.notifier.send(sub.user_id, text, schedule_kb(sub.id, day_idx))
 

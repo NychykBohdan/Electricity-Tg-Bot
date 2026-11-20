@@ -3,8 +3,7 @@ from datetime import datetime, timedelta
 from app.config import TZ
 from app.core.formatter import format_schedule
 from app.db.models import Subscription
-from app.db.repo import Database, from_db, snapshot_to_day
-from app.services.poller import sub_subtitle
+from app.db.repo import Database, snapshot_to_day
 
 
 async def render_schedule(db: Database, sub: Subscription, day_idx: int) -> str:
@@ -13,16 +12,12 @@ async def render_schedule(db: Database, sub: Subscription, day_idx: int) -> str:
     rows = await db.get_days(sub.source_key, sub.group, [today, today + timedelta(days=1)])
     target = today + timedelta(days=day_idx)
     row = rows.get(target)
-    subtitle = sub_subtitle(sub.city_key, sub.group)
-    if sub.address:
-        subtitle += f"\n{sub.address}"
     return format_schedule(
         title=sub.title,
-        subtitle=subtitle,
+        group=sub.group,
         day=snapshot_to_day(row) if row else None,
         now=now,
         target=target,
         context_days=[snapshot_to_day(r) for r in rows.values()],
-        updated_at=from_db(row.updated_at).astimezone(TZ) if row else None,
         view=sub.schedule_view,
     )
