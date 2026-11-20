@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -105,10 +105,17 @@ def test_format_outputs():
     print("\n" + text)
     assert "Сьогодні, пн 9 листопада" in text
     assert "06:00–09:30" in text and "Без світла: <b>6 год 30 хв</b>" in text
+    # минулі періоди закреслені, поточний і майбутні — ні; між періодами порожній рядок
+    assert "🟢 <s>00:00–06:00</s>\n\n🔴 <s>06:00–09:30  без світла</s>\n\n🟢 09:30–16:00\n\n" in text
+    assert "🔴 <b>16:00–19:00</b>  без світла" in text
+
+    # завтра нічого не закреслено
+    tomorrow_text = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now - timedelta(days=1))
+    assert "<s>" not in tomorrow_text
 
     # лише години без світла
     off_only = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now, view="off")
-    assert "🔴 <b>06:00–09:30</b>" in off_only and "🟢 09:30–16:00" not in off_only
+    assert "🔴 <s>06:00–09:30  без світла</s>" in off_only and "09:30–16:00" not in off_only
     # лише години зі світлом
     on_only = format_schedule(title="Дім", subtitle=subtitle, day=day, now=now, view="on")
     assert "🟢 <b>09:30–16:00</b>  зі світлом" in on_only and "🔴 <b>06:00" not in on_only

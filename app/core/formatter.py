@@ -110,13 +110,24 @@ def format_schedule(
             lines.append("✅ Відключень не заплановано")
         else:
             on_minutes = 1440 - day.total_off_minutes
+            # хвилина доби «зараз» — лише для сьогодні; для завтра нічого не закреслюємо
+            now_min = now.hour * 60 + now.minute if day.day == now.date() else -1
+            rows: list[str] = []
             for is_off, it in segments(day):
-                if is_off and view != "on":
-                    lines.append(f"🔴 <b>{interval_str(it)}</b>  без світла")
-                elif not is_off and view == "on":
-                    lines.append(f"🟢 <b>{interval_str(it)}</b>  зі світлом")
-                elif not is_off and view == "all":
-                    lines.append(f"🟢 {interval_str(it)}")
+                if (view == "on" and is_off) or (view == "off" and not is_off):
+                    continue
+                icon = "🔴" if is_off else "🟢"
+                note = "  без світла" if is_off else ("  зі світлом" if view == "on" else "")
+                if it.end <= now_min:  # уже минуло — закреслюємо
+                    rows.append(f"{icon} <s>{interval_str(it)}{note}</s>")
+                elif is_off or view == "on":
+                    rows.append(f"{icon} <b>{interval_str(it)}</b>{note}")
+                else:
+                    rows.append(f"{icon} {interval_str(it)}")
+            for i, row in enumerate(rows):
+                if i:
+                    lines.append("")  # порожній рядок між періодами — щоб легше читалось
+                lines.append(row)
             if view == "on" and not on_minutes:
                 lines.append("🔴 Світла не буде цілу добу")
             summary = (
