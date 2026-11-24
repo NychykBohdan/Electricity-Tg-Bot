@@ -11,7 +11,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 PREF_FIELDS = ("schedule_view", "schedule_period", "remind_minutes", "restore_remind_minutes", "notify_changes")
 DEFAULT_PREFS = {
     "schedule_view": "all",       # "all" — години зі світлом і без, "on" — лише зі світлом, "off" — лише без
-    "schedule_period": "day",     # "day" — уся доба, "now" — поточний і наступний період
+    "schedule_period": "day",     # "day" — уся доба, "now" — поточний і всі наступні періоди
     "remind_minutes": 30,         # за скільки хв до відключення; 0 = вимкнено
     "restore_remind_minutes": 0,  # за скільки хв до появи світла; 0 = вимкнено
     "notify_changes": True,       # повідомляти про зміни графіка

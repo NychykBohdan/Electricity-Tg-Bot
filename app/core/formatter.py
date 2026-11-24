@@ -81,7 +81,7 @@ def hours_block(day: DaySchedule, now: datetime, view: str = "all", period: str 
     """Перелік періодів дня і підсумок («⚡️ Сьогодні без світла: 9 год»; None — якщо рахувати нічого).
 
     view: "all" — години зі світлом і без, "on" — лише зі світлом, "off" — лише без світла.
-    period: "day" — уся доба, "now" — лише поточний і наступний період (для сьогодні)."""
+    period: "day" — уся доба, "now" — поточний період і всі наступні, без минулих (для сьогодні)."""
     if day.status == DayStatus.WAITING:
         return ["⏳ Графік ще не опубліковано"], None
     if day.status == DayStatus.EMERGENCY:
@@ -106,8 +106,8 @@ def hours_block(day: DaySchedule, now: datetime, view: str = "all", period: str 
         else:
             rows.append((False, f"{icon} {interval_str(it)}"))
     if period == "now" and now_min >= 0:
-        # лише поточний і наступний період; на завтра графік завжди повний
-        rows = [r for r in rows if not r[0]][:2]
+        # ховаємо лише минулі періоди — жодне майбутнє відключення не губимо; на завтра графік завжди повний
+        rows = [r for r in rows if not r[0]]
         if not rows and on_minutes:
             lines.append("🔴 Сьогодні світла вже не буде" if view == "on" else "✅ Сьогодні відключень більше немає")
     for i, (_, row) in enumerate(rows):

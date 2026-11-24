@@ -147,7 +147,7 @@ def test_format_outputs():
 
 
 def test_period_now():
-    """Режим «поточний і наступний період»: лише два рядки, минулі приховано."""
+    """Режим «зараз і далі»: минулі періоди приховано, усі наступні — показано."""
     day = DaySchedule(D, DayStatus.SCHEDULE, (Interval(360, 570), Interval(960, 1140)))
     at = lambda h, m=0: datetime(2026, 11, 9, h, m, tzinfo=TZ)  # noqa: E731
 
@@ -155,7 +155,7 @@ def test_period_now():
         return [ln for ln in text.split("\n") if ln.startswith(("🟢 ", "🔴 ", "✅ ")) and "Зараз" not in ln]
 
     fmt = lambda now, **kw: format_schedule(title="Дім", subtitle="s", day=day, now=now, period="now", **kw)  # noqa: E731
-    assert periods(fmt(at(14, 30))) == ["🟢 09:30–16:00", "🔴 <b>16:00–19:00</b>  без світла"]
+    assert periods(fmt(at(14, 30))) == ["🟢 09:30–16:00", "🔴 <b>16:00–19:00</b>  без світла", "🟢 19:00–24:00"]
     assert periods(fmt(at(20))) == ["🟢 19:00–24:00"]               # останній період доби
     assert periods(fmt(at(7), view="off")) == [
         "🔴 <b>06:00–09:30</b>  без світла", "🔴 <b>16:00–19:00</b>  без світла",
@@ -167,4 +167,13 @@ def test_period_now():
     # у повідомленні про зміну — так само
     old = DaySchedule(D, DayStatus.SCHEDULE, (Interval(360, 570),))
     msg = format_change("Дім", "s", compare(old, day), at(14, 30), period="now")
-    assert periods(msg) == ["🟢 09:30–16:00", "🔴 <b>16:00–19:00</b>  без світла"]
+    assert periods(msg) == ["🟢 09:30–16:00", "🔴 <b>16:00–19:00</b>  без світла", "🟢 19:00–24:00"]
+
+
+def test_period_now_keeps_all_future_outages():
+    """Регресія: три відключення за день — у режимі «зараз і далі» не можна губити третє."""
+    day = DaySchedule(D, DayStatus.SCHEDULE, (Interval(660, 990), Interval(1110, 1200), Interval(1320, 1440)))
+    now = datetime(2026, 11, 9, 10, 56, tzinfo=TZ)
+    msg = format_schedule(title="Дім", subtitle="s", day=day, now=now, view="off", period="now")
+    for it in ("11:00–16:30", "18:30–20:00", "22:00–24:00"):
+        assert it in msg
