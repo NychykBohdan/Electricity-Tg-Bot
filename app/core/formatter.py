@@ -185,8 +185,20 @@ def format_change(
     return sections(head, rows, rest)
 
 
+def minutes_left(until: datetime, now: datetime) -> int:
+    """Скільки хвилин лишилось, округлено до кратного 5 (9 → 10, 14 → 15, 29 → 30).
+
+    Cron смикає бота з запізненням, тож «через 9 хв» замість «через 10 хв» — шум.
+    Менше 5 хв показуємо як є.
+    """
+    left = (until - now).total_seconds() / 60
+    if left < 4.5:
+        return max(1, round(left))
+    return int((left + 2.5) // 5) * 5
+
+
 def format_reminder(title: str, ev: Event, now: datetime) -> str:
-    left = max(1, round((ev.start - now).total_seconds() / 60))
+    left = minutes_left(ev.start, now)
     return (
         f"⏰ <b>Відключення через {duration(left)}</b>\n"
         f"📍 {escape(title)}\n"
@@ -195,7 +207,7 @@ def format_reminder(title: str, ev: Event, now: datetime) -> str:
 
 
 def format_restore_reminder(title: str, ev: Event, now: datetime) -> str:
-    left = max(1, round((ev.end - now).total_seconds() / 60))
+    left = minutes_left(ev.end, now)
     return (
         f"💡 <b>Світло з'явиться через {duration(left)}</b>\n"
         f"📍 {escape(title)}\n"

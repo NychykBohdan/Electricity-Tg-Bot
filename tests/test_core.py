@@ -177,3 +177,12 @@ def test_period_now_keeps_all_future_outages():
     msg = format_schedule(title="Дім", subtitle="s", day=day, now=now, view="off", period="now")
     for it in ("11:00–16:30", "18:30–20:00", "22:00–24:00"):
         assert it in msg
+
+
+def test_minutes_left_rounds_to_five():
+    from datetime import datetime, timedelta
+    from app.core.formatter import minutes_left
+    t = datetime(2026, 1, 1, 12, 0)
+    m = lambda mins: minutes_left(t + timedelta(minutes=mins), t)
+    assert [m(9), m(9.3), m(14), m(29), m(31), m(12), m(13), m(60)] == [10, 10, 15, 30, 30, 10, 15, 60]
+    assert [m(3), m(4.6), m(0.2)] == [3, 5, 1]
